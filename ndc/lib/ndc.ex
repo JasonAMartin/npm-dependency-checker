@@ -4,6 +4,10 @@ defmodule Ndc do
      devDependencies dependencies
   )
 
+  @npm_view_fields ~w(
+     repository
+  )
+
   # Application Start
   def main(args) do
    args |> parse_args |> process
@@ -19,7 +23,8 @@ defmodule Ndc do
     IO.puts "NPM package: #{options[:pkg]}"
     options[:pkg]
       |> npm_view
-      |> get_package_repo_url
+      |> elem(0)
+      |> decode_body(@npm_view_fields)
       |> transform_repo_raw_json_url
       |> fetch_package_json
       |> parse_dependencies
@@ -50,7 +55,7 @@ defmodule Ndc do
   Returns: the output of that command
   """
   def npm_view(package) when is_binary(package) do
-    System.cmd("npm", ["view", package])
+    System.cmd("npm", ["view", "--json", package])
   end
 
   @doc """
@@ -59,20 +64,12 @@ defmodule Ndc do
   def npm_view(_anything), do: false
 
   @doc """
-  Runs a regex on data passed in and returns data between the start and stop.
-  """
-  def get_package_repo_url(data) do
-    ## sending output from npm view on the command line.
-     Regex.run(~r/homepage: \'(.*)\'/, elem(data,0)) |> Enum.at(1)
-  end
-
-  @doc """
   Fetches a url, which should be a JSON file and sends it to decode_body for decoding to a map
   """
   def fetch_package_json(repo) do
     case HTTPoison.get(repo) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        decode_body(body)
+        decode_body(body, @expected_fields)
       {:ok, %HTTPoison.Response{status_code: 404}} ->
         "Your princess is in another castle."
       {:error, %HTTPoison.Error{reason: reason}} ->
@@ -80,21 +77,22 @@ defmodule Ndc do
     end
   end
 
-  def decode_body(body) do
+  def decode_body(body, fields) do
     body
     |> Poison.decode!
-    |> Map.take(@expected_fields)
+    |> Map.take(fields)
     |> Enum.map(fn({k, v}) -> {String.to_atom(k), v} end)
   end
-
 
   @doc """
   Takes a GitHub url and transforms it to point to the package.json in the master branch
   """
-  def transform_repo_raw_json_url(repo) when is_binary(repo) do
+  def transform_repo_raw_json_url(repo) when is_list(repo) do
     ## we will do a little replace therapy to fetch the raw json.
+    ## expected: git+https://github.com/user/repo.git
     ## end result is: https://raw.githubusercontent.com/someuser/somerepo/master/package.json
-    String.replace(repo, "#readme","")
+    String.replace(repo[:repository]["url"], "git+","")
+      |> String.replace(".git", "")
       |> String.replace("github","raw.githubusercontent")
       |>  (fn x -> x <> "/master/package.json" end).()
   end
