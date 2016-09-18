@@ -2,17 +2,17 @@
 
 This tool was written as part of a let's build for [ElixirDev.io](http://www.elixirdev.io).
 
-#### Goal Overview
+#### Current Version
 
-* I'd like some sort of indicator that it's working (progress notification)
-* I'd like it to be as fast as possible. At first, I just want it work, but it should end up concurrently grabbing all the package info.
-* I'd like the output to be easy-to-read in the terminal, but I'd like to be able to pass in an argument to store it into a file (for those who don't want to >>)
+A major refactor of the tool was done and the current version is working nicely. You kick it off by passing in a package you're interested in (for example: react) and it will tell you how many dependencies you'll be installing to use it.
 
-#### Update
-
-As of now NPM Dependency Checker will give you a listing of dependencies for a package published to NPM. It currently only lists out the first dependency list (so either dependencies or devDependencies).
+While some packages might only have a tree of 2-10 dependencies, I've found some that end up with over 500 dependencies.
 
 #### Usage
+
+**Configure**
+
+Go to */config/config.exs* and update the two config options as desired.
 
 **Build the application**
 
@@ -34,29 +34,13 @@ Example output:
 
 ```
 ## OUTPUT:
-NPM package: jest
-"babel-core"
-"babel-eslint"
-"babel-plugin-syntax-trailing-function-commas"
-"babel-plugin-transform-es2015-destructuring"
-"babel-plugin-transform-es2015-parameters"
-"babel-plugin-transform-flow-strip-types"
-"chalk"
-"codecov"
-"eslint"
-"eslint-plugin-babel"
-"eslint-plugin-flow-vars"
-"eslint-plugin-flowtype"
-"eslint-plugin-react"
-"flow-bin"
-"glob"
-"graceful-fs"
-"istanbul-api"
-"istanbul-lib-coverage"
-"jasmine-reporters"
-"lerna"
-"minimatch"
-"mkdirp"
-"progress"
-"rimraf"
+NPM starting package: react
+[{"ua-parser-js", "^0.7.9"}, {"asap", "~2.0.3"}, {"promise", "^7.1.1"},
+ {"loose-envify", "^1.0.0"}, {"whatwg-fetch", "^0.8.2"},
+ {"iconv-lite", "~0.4.4"}, {"encoding", "^0.1.11"}, {"node-fetch", "^1.0.1"},
+ {"isomorphic-fetch", "^2.1.1"}, {"immutable", "^3.7.6"}, {"core-js", "^1.0.0"},
+ {"fbjs", "^0.8.4"}, {"js-tokens", "^1.0.1"}, {"loose-envify", "^1.1.0"},
+ {"object-assign", "^4.1.0"}, {"react", "latest"}]
+Total number of dependencies: 16
+Dependencies were saved into dep_list.txt in directory /over/here/.
 ```
