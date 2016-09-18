@@ -1,12 +1,17 @@
 defmodule Ndc do
+  @working_directory Application.get_env(:ndc, __MODULE__)[:working_directory]
+
+  @working_filename Application.get_env(:ndc, __MODULE__)[:working_filename]
 
   @expected_fields ~w(
-     devDependencies dependencies
+    dependencies
   )
 
   @npm_view_fields ~w(
-     repository
+     dependencies
   )
+
+  ####@message_types [{~r/http/, :http}]
 
   # Application Start
   def main(args) do
@@ -20,29 +25,84 @@ defmodule Ndc do
 
   # Arguments were passed via command line
   def process(options) do
-    IO.puts "NPM package: #{options[:pkg]}"
+    IO.puts "NPM starting package: #{options[:pkg]}"
     options[:pkg]
-      |> npm_view
-      |> elem(0)
-      |> decode_body(@npm_view_fields)
-      |> transform_repo_raw_json_url
-      |> fetch_package_json
-      |> parse_dependencies
+      |> initial_package_information
   end
 
-  ## This function only parses the first item in the list. It needs to be refactored.
-  def parse_dependencies(dependencies_list) do
-    Enum.at(dependencies_list, 0)
-      |> (fn x -> iterate_dependencies(elem(x, 1)) end).()
+  def initial_package_information(repo) do
+    dependencies = repo
+      |> npm_view("latest")
+      |> elem(0)
+      |> decode_body(@npm_view_fields)
+      |> parse_dependencies
+    cond do
+    (dependencies == []) -> get_package_information(:error404)
+    true -> get_package_information(dependencies, [{repo, "latest"}])
+    end
+  end
+
+  def get_package_information(pending_dependency_list, all_dependencies_list) do
+      package = elem(List.first(pending_dependency_list),0)
+      version = elem(List.first(pending_dependency_list),1)
+        repo = package
+          |> npm_view(version)
+          |> elem(0)
+          |> decode_body(@npm_view_fields)
+          |> parse_dependencies
+
+        ## Scrubbing deps from npm_view call against pening+all deps. Remaining are added to pending.
+        ## Make map sets
+        [current_dependency | remaining_dependencies] = pending_dependency_list
+
+        dependency_union = MapSet.union(MapSet.new(all_dependencies_list), MapSet.new(remaining_dependencies))
+        scrubbed_dependencies = MapSet.difference(MapSet.new(repo), dependency_union)
+        update_pending = MapSet.to_list(scrubbed_dependencies)++remaining_dependencies
+        complete_dependency_list = [current_dependency]++all_dependencies_list
+
+      ## get next dep if exists and recall. If not, recall with just 1 arg.
+      cond do
+        (length(update_pending) > 0) ->
+          get_package_information(update_pending, complete_dependency_list)
+        true ->
+          get_package_information(complete_dependency_list)
+      end
   end
 
   @doc """
-  Iterates through a map and prints out the key:value pairs
-  Returns `:ok`.
+  When :error404 is passed in, the user is told nothing is found.
   """
-  def iterate_dependencies(map) when is_map(map) do
-    ## More work to do.
-    Enum.map(map, fn {k, v} -> IO.inspect [k,v] end)
+  def get_package_information(:error404) do
+    IO.inspect "Nothing found."
+  end
+
+  @doc """
+  Takes a list and reports back to the user the dependencies and count. It also writes a file that lists all dependencies.
+  """
+  def get_package_information(all_dependencies_list) do
+    IO.inspect all_dependencies_list
+    IO.puts "Total number of dependencies: #{length(all_dependencies_list)}"
+    IO.puts "Dependencies were saved into #{@working_filename} in directory #{@working_directory}."
+
+    final_list = Enum.reduce all_dependencies_list, [], fn {k, v}, acc ->
+      updated_version = v
+        |> String.replace("^", "")
+        |> String.replace("~", "")
+        |> String.replace("%", "")
+      ["#{k}:#{updated_version}\n"]++acc
+    end
+
+    File.write!(Path.absname("#{@working_directory}#{@working_filename}"), List.to_string(final_list))
+  end
+
+  @doc """
+  Takes a list with {atom:, %{map}} elements and returns a merged list of Repos structs for dependencies.
+  """
+  def parse_dependencies(dependencies_list) do
+    dependencies = (dependencies_list[:dependencies] == nil) && [] || Enum.reduce dependencies_list[:dependencies], [], fn {k, v}, acc ->
+      [{k,v}]++acc
+    end
+    dependencies
   end
 
   @doc """
@@ -51,11 +111,12 @@ defmodule Ndc do
   def iterate_dependencies(_anything_else), do: false
 
   @doc """
-  Takes a String and runs the system command "npm view <package>"
+  Takes a String and runs the system command "npm view --json <package>@<version>"
   Returns: the output of that command
   """
-  def npm_view(package) when is_binary(package) do
-    System.cmd("npm", ["view", "--json", package])
+  def npm_view(package, version) when is_binary(package) do
+    repo = "#{package}@#{version}"
+    System.cmd("npm", ["view", "--json", repo])
   end
 
   @doc """
@@ -64,43 +125,28 @@ defmodule Ndc do
   def npm_view(_anything), do: false
 
   @doc """
-  Fetches a url, which should be a JSON file and sends it to decode_body for decoding to a map
+  Guards against decode_body receiving undefined responses.
   """
-  def fetch_package_json(repo) do
-    case HTTPoison.get(repo) do
-      {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        decode_body(body, @expected_fields)
-      {:ok, %HTTPoison.Response{status_code: 404}} ->
-        "Your princess is in another castle."
-      {:error, %HTTPoison.Error{reason: reason}} ->
-        raise reason
-    end
+  def decode_body("undefined\n", _) do
+    [dependencies: %{}]
   end
 
+  @doc """
+  Guards against decode_body receiving empty responses.
+  """
+  def decode_body("", _) do
+    [dependencies: %{}]
+  end
+
+  @doc """
+  Takes a JSON body and desired fields and returns a map with that information.
+  """
   def decode_body(body, fields) do
     body
     |> Poison.decode!
     |> Map.take(fields)
     |> Enum.map(fn({k, v}) -> {String.to_atom(k), v} end)
   end
-
-  @doc """
-  Takes a GitHub url and transforms it to point to the package.json in the master branch
-  """
-  def transform_repo_raw_json_url(repo) when is_list(repo) do
-    ## we will do a little replace therapy to fetch the raw json.
-    ## expected: git+https://github.com/user/repo.git
-    ## end result is: https://raw.githubusercontent.com/someuser/somerepo/master/package.json
-    String.replace(repo[:repository]["url"], "git+","")
-      |> String.replace(".git", "")
-      |> String.replace("github","raw.githubusercontent")
-      |>  (fn x -> x <> "/master/package.json" end).()
-  end
-
-  @doc """
-  Returns false when a non-binary is passed in
-  """
-  def transform_repo_raw_json_url(_anything_else), do: false
 
   # Handle parsing of arguments
   defp parse_args(args) do
